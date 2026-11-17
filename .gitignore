@@ -7,6 +7,9 @@ bin/
 # Environment
 .env
 
+# Private keys
+*.pem
+
 # Temp files
 tmp/
 

@@ -3,49 +3,134 @@ name: Backend Deploy
 on:
   push:
     branches:
-      - staging   # -> staging EC2
-      - main      # -> production EC2
+      - staging
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Determine target environment by branch
-    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Build Linux binary
+      - name: Deploy through AWS Systems Manager
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          DEPLOY_BRANCH: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o vidly-backend ./cmd/server
+          set -euo pipefail
 
-      - name: Upload binary to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          target: /opt/vidly
-          source: vidly-backend
-          strip_components: 0
+          # The EC2 instance clones the public repository and builds locally.
+          # This avoids SSH, S3, and oversized SSM command payloads.
+          cat > deploy-remote.sh <<'REMOTE_SCRIPT'
+          set -euo pipefail
 
-      - name: Restart service on server
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            set -e
-            # keep env file, replace binary
-            mv /opt/vidly/vidly-backend /opt/vidly/vidly-backend.tmp 2>/dev/null || true
-            sudo systemctl restart vidly
-            sleep 3
-            # health check; rollback if it fails
-            if curl -fsS http://localhost:8080/health > /dev/null; then
-              echo "Deploy OK, service healthy"
-            else
-              echo "Health check FAILED"
-              sudo systemctl status vidly --no-pager
-              exit 1
-            fi
+          BRANCH="__DEPLOY_BRANCH__"
+          SOURCE_DIR="/opt/vidly/source"
+          NEW_BINARY="/tmp/vidly-backend-new"
+
+          echo "Deploying branch: ${BRANCH}"
+
+          if [ ! -d "${SOURCE_DIR}/.git" ]; then
+            sudo rm -rf "${SOURCE_DIR}"
+            sudo git clone \
+              --branch "${BRANCH}" \
+              --depth 1 \
+              https://github.com/Cet412/Vidly.git \
+              "${SOURCE_DIR}"
+          else
+            cd "${SOURCE_DIR}"
+            sudo git fetch origin "${BRANCH}"
+            sudo git checkout "${BRANCH}"
+            sudo git reset --hard "origin/${BRANCH}"
+          fi
+
+          cd "${SOURCE_DIR}"
+
+          sudo env \
+            PATH="/usr/local/go/bin:/usr/bin:/bin" \
+            CGO_ENABLED=0 \
+            GOOS=linux \
+            GOARCH=amd64 \
+            /usr/local/go/bin/go build \
+            -ldflags="-s -w" \
+            -o "${NEW_BINARY}" \
+            ./cmd/server
+
+          sudo install \
+            -o vidly \
+            -g vidly \
+            -m 755 \
+            "${NEW_BINARY}" \
+            /opt/vidly/vidly-backend
+
+          sudo systemctl restart vidly
+          sleep 3
+
+          sudo systemctl is-active --quiet vidly
+          curl --fail --silent --show-error \
+            http://localhost:8080/health
+
+          echo "Deployment successful"
+          REMOTE_SCRIPT
+
+          sed -i "s/__DEPLOY_BRANCH__/${DEPLOY_BRANCH}/g" deploy-remote.sh
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region "${AWS_REGION}" \
+            --instance-ids "${EC2_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Vidly deployment ${COMMIT_SHA}" \
+            --parameters "$(jq -Rs '{commands: [.]}' deploy-remote.sh)" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM command: ${COMMAND_ID}"
+
+          STATUS="Pending"
+          for attempt in {1..90}; do
+            STATUS=$(aws ssm get-command-invocation \
+              --region "${AWS_REGION}" \
+              --command-id "${COMMAND_ID}" \
+              --instance-id "${EC2_INSTANCE_ID}" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+
+            case "${STATUS}" in
+              Success|Failed|TimedOut|Cancelled|Cancelling)
+                break
+                ;;
+              *)
+                sleep 5
+                ;;
+            esac
+          done
+
+          echo "SSM status: ${STATUS}"
+
+          aws ssm get-command-invocation \
+            --region "${AWS_REGION}" \
+            --command-id "${COMMAND_ID}" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --query "StandardOutputContent" \
+            --output text || true
+
+          echo "--- remote error output ---"
+          aws ssm get-command-invocation \
+            --region "${AWS_REGION}" \
+            --command-id "${COMMAND_ID}" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --query "StandardErrorContent" \
+            --output text || true
+
+          if [ "${STATUS}" != "Success" ]; then
+            echo "Deployment failed"
+            exit 1
+          fi
