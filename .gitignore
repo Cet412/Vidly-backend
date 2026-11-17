@@ -1,0 +1,18 @@
+# Binaries
+*.exe
+*.test
+*.out
+bin/
+
+# Environment
+.env
+
+# Temp files
+tmp/
+
+# Logs
+logs/
+*.log
+
+vidly-backend
+

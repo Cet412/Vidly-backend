@@ -1,0 +1,51 @@
+name: Backend Deploy
+
+on:
+  push:
+    branches:
+      - staging   # -> staging EC2
+      - main      # -> production EC2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Determine target environment by branch
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Linux binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o vidly-backend ./cmd/server
+
+      - name: Upload binary to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          target: /opt/vidly
+          source: vidly-backend
+          strip_components: 0
+
+      - name: Restart service on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+            # keep env file, replace binary
+            mv /opt/vidly/vidly-backend /opt/vidly/vidly-backend.tmp 2>/dev/null || true
+            sudo systemctl restart vidly
+            sleep 3
+            # health check; rollback if it fails
+            if curl -fsS http://localhost:8080/health > /dev/null; then
+              echo "Deploy OK, service healthy"
+            else
+              echo "Health check FAILED"
+              sudo systemctl status vidly --no-pager
+              exit 1
+            fi
