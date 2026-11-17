@@ -19,13 +19,21 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o vidly-backend ./cmd/server
 
+      - name: Prepare deployment key
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          test -n "$SERVER_SSH_KEY"
+          printf '%s' "$SERVER_SSH_KEY" | tr -d '\r' | sed 's/\\n/\n/g' > "$GITHUB_WORKSPACE/.deploy_key"
+          chmod 600 "$GITHUB_WORKSPACE/.deploy_key"
+
       - name: Upload binary to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          target: /opt/vidly
+          key_path: ./.deploy_key
+          target: /tmp
           source: vidly-backend
           strip_components: 0
 
@@ -34,11 +42,12 @@ jobs:
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          key_path: ./.deploy_key
           script: |
             set -e
             # keep env file, replace binary
-            mv /opt/vidly/vidly-backend /opt/vidly/vidly-backend.tmp 2>/dev/null || true
+            sudo mv /tmp/vidly-backend /opt/vidly/vidly-backend
+            sudo chown vidly:vidly /opt/vidly/vidly-backend
             sudo systemctl restart vidly
             sleep 3
             # health check; rollback if it fails
@@ -49,3 +58,7 @@ jobs:
               sudo systemctl status vidly --no-pager
               exit 1
             fi
+
+      - name: Remove deployment key
+        if: always()
+        run: rm -f "$GITHUB_WORKSPACE/.deploy_key"
