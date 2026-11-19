@@ -19,7 +19,7 @@ import (
 	"github.com/yourusername/vidly-backend/internal/ratelimit"
 )
 
-var supportedHosts = regexp.MustCompile(`(?i)^(www\.)?(instagram\.com|instagr\.am|tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com)$`)
+var supportedHosts = regexp.MustCompile(`(?i)^(www\.)?(instagram\.com|instagr\.am|tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com|youtube\.com|youtu\.be)$`)
 
 type Handler struct {
 	cfg      *config.Config
