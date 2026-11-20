@@ -35,7 +35,6 @@ func (y *YtDlp) Version() (string, error) {
 
 func (y *YtDlp) Download(url, outputPath string) ([]byte, error) {
 	args := []string{
-		"-f", "best", // best video+audio available (auto)
 		"--no-playlist",
 		"--no-warnings",
 		"-o", outputPath,
