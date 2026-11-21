@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -86,6 +87,14 @@ func (h *Handler) Download(c *gin.Context) {
 	if err != nil {
 		h.limiter.Refund(ip) // failed download does not consume quota
 		fmt.Printf("ytdlp failed: %s\n", string(out))
+		
+		// Detect photo-only content
+		outStr := string(out)
+		if strings.Contains(outStr, "There is no video in this post") {
+			respondError(c, http.StatusBadRequest, "Konten ini adalah foto. Hanya video yang bisa diunduh. Fitur download foto akan datang di versi mendatang.")
+			return
+		}
+		
 		respondError(c, http.StatusBadGateway, "gagal mengunduh dari sumber, coba lagi nanti")
 		return
 	}
