@@ -3,6 +3,7 @@ package downloader
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/yourusername/vidly-backend/internal/config"
 )
@@ -34,10 +35,17 @@ func (y *YtDlp) Version() (string, error) {
 }
 
 func (y *YtDlp) Download(url, outputPath string) ([]byte, error) {
+	// outputPath is like "/tmp/id.%(ext)s" — inject uploader name into template.
+	// yt-dlp replaces %(uploader)s with the channel/creator name.
+	template := outputPath
+	// Insert uploader before extension placeholder: id_%(uploader|title)s.%(ext)s
+	template = strings.Replace(template, ".%(ext)s", "_%(uploader|title)s.%(ext)s", 1)
+
 	args := []string{
+		"--restrict-filenames", // sanitize special chars in filenames
 		"--no-playlist",
 		"--no-warnings",
-		"-o", outputPath,
+		"-o", template,
 		"--newline",
 		url,
 	}
