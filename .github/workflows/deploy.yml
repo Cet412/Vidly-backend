@@ -43,7 +43,7 @@ jobs:
             sudo git clone \
               --branch "${BRANCH}" \
               --depth 1 \
-              https://github.com/Cet412/Vidly.git \
+              https://github.com/Cet412/vidly-backend.git \
               "${SOURCE_DIR}"
           else
             cd "${SOURCE_DIR}"
