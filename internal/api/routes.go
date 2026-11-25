@@ -18,6 +18,10 @@ func NewRouter(cfg *config.Config, limiter *ratelimit.Limiter, ytdlp *downloader
 	}
 
 	r := gin.New()
+
+	// Only trust localhost (nginx reverse proxy).
+	r.SetTrustedProxies([]string{"127.0.0.1", "::1"})
+
 	r.Use(middleware.Logger(), middleware.ErrorHandler())
 	r.MaxMultipartMemory = 1 << 20 // tiny; API is JSON-only
 

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,18 +28,28 @@ func main() {
 
 	limiter := ratelimit.NewLimiter(cfg.RateLimit, cfg.RateWindow)
 	ytdlp := downloader.New(cfg)
-	// Best-effort yt-dlp update on boot; a failed update simply keeps
-	// the previously installed version working (silent fallback).
+	// Best-effort yt-dlp update on boot.
 	if err := ytdlp.Update(); err != nil {
 		fmt.Println("yt-dlp update skipped (kept previous version):", err)
 	}
 
+	// Sweep old temp dirs from previous crashes.
+	if entries, err := os.ReadDir(cfg.TempDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "dl_") {
+				os.RemoveAll(filepath.Join(cfg.TempDir, e.Name()))
+			}
+		}
+	}
+
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      api.NewRouter(cfg, limiter, ytdlp),
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		IdleTimeout:  cfg.IdleTimeout,
+		Addr:              ":" + cfg.Port,
+		Handler:           api.NewRouter(cfg, limiter, ytdlp),
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
 
 	// Graceful shutdown: on SIGINT/SIGTERM, stop accepting new conns

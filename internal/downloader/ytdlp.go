@@ -1,9 +1,10 @@
 package downloader
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
-	"strings"
+	"path/filepath"
 
 	"github.com/yourusername/vidly-backend/internal/config"
 )
@@ -16,9 +17,7 @@ func New(cfg *config.Config) *YtDlp {
 	return &YtDlp{cfg: cfg}
 }
 
-// Update attempts to update yt-dlp in place and returns an error
-// if the current installation is unusable; auto-update README'd behavior:
-// failure to update trivially keeps the previous version working.
+// Update attempts to update yt-dlp in place.
 func (y *YtDlp) Update() error {
 	cmd := exec.Command(y.cfg.YTDLPPath, "--update")
 	out, err := cmd.CombinedOutput()
@@ -34,24 +33,28 @@ func (y *YtDlp) Version() (string, error) {
 	return string(out), nil
 }
 
-func (y *YtDlp) Download(url, outputPath string) ([]byte, error) {
-	// outputPath is like "/tmp/id.%(ext)s" — inject uploader name into template.
-	// yt-dlp replaces %(uploader)s with the channel/creator name.
-	template := outputPath
-	// Insert uploader before extension placeholder: id_%(uploader|title)s.%(ext)s
-	template = strings.Replace(template, ".%(ext)s", "_%(uploader|title)s.%(ext)s", 1)
-
+// Download runs yt-dlp with hardened arguments.
+// Uses exec.CommandContext for timeout/cancellation support.
+func (y *YtDlp) Download(ctx context.Context, url, outputPath string) ([]byte, error) {
 	args := []string{
-		"--restrict-filenames", // sanitize special chars in filenames
-		"--no-playlist",
+		"--ignore-config",       // prevent reading attacker-controlled config
+		"--no-playlist",         // prevent playlist expansion
+		"--max-downloads", "1",  // extra safety
 		"--no-warnings",
-		"-o", template,
-		"--newline",
+		"--restrict-filenames",  // sanitize special chars
+		"--max-filesize", "100M",
+		"--socket-timeout", "15",
+		"--retries", "3",
+		"-o", outputPath,
+		"--",                    // prevent argument injection
 		url,
 	}
-	cmd := exec.Command(y.cfg.YTDLPPath, args...)
-	cmd.Dir = "/tmp"
+
+	cmd := exec.CommandContext(ctx, y.cfg.YTDLPPath, args...)
+	cmd.Dir = filepath.Dir(outputPath)
+
 	out, err := cmd.CombinedOutput()
+
 	if err != nil {
 		return out, fmt.Errorf("ytdlp: %w", err)
 	}
